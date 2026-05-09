@@ -1,0 +1,58 @@
+version: 2
+
+project_name: ghealth
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ghealth
+    main: .
+    binary: ghealth
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: ghealth
+    ids:
+      - ghealth
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+brews:
+  - name: ghealth
+    repository:
+      owner: rudrankriyam
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/rudrankriyam/google-health-cli
+    description: Google Health API workbench CLI
+    license: MIT
+    test: |
+      system "#{bin}/ghealth", "version"
+
+release:
+  github:
+    owner: rudrankriyam
+    name: google-health-cli

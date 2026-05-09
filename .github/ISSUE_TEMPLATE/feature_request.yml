@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a ghealth improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What should be easier or possible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What command or behavior would you like?
+    validations:
+      required: true
