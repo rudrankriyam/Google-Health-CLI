@@ -9,14 +9,26 @@ The CLI ships as `ghealth` and gives you OAuth setup, data queries, rollups, pro
 
 ## Install
 
+Install with Brew:
+
 ```sh
 brew install rudrankriyam/tap/ghealth
 ```
 
-Or install with Go:
+Install with Go:
 
 ```sh
 go install github.com/rudrankriyam/Google-Health-CLI@latest
+```
+
+Fedora 44+ and derivatives
+
+Install [Terra](https://terrapkg.com/)
+
+Then:
+
+```sh
+dnf install google-health-cli`
 ```
 
 Check your setup:
