@@ -36,6 +36,18 @@ func TestFilterFromRange(t *testing.T) {
 	}
 }
 
+func TestFilterFromRangeSleepTimestampUsesEndTime(t *testing.T) {
+	dataType, ok := Lookup("sleep")
+	if !ok {
+		t.Fatal("sleep missing")
+	}
+	got := FilterFromRange(dataType, "2026-05-08T00:00:00Z", "2026-05-09T00:00:00Z")
+	want := `sleep.interval.end_time >= "2026-05-08T00:00:00Z" AND sleep.interval.end_time < "2026-05-09T00:00:00Z"`
+	if got != want {
+		t.Fatalf("FilterFromRange() = %q, want %q", got, want)
+	}
+}
+
 func TestFilterFromRangeUsesSleepCivilEndTime(t *testing.T) {
 	dataType, ok := Lookup("sleep")
 	if !ok {

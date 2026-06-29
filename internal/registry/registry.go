@@ -112,6 +112,9 @@ func FilterFromRange(dataType DataType, from, to string) string {
 	if field == "" || strings.TrimSpace(from) == "" {
 		return ""
 	}
+	if dataType.EndpointName == "sleep" && strings.Contains(from, "T") {
+		field = "sleep.interval.end_time"
+	}
 	parts := []string{fmt.Sprintf(`%s >= "%s"`, field, from)}
 	if strings.TrimSpace(to) != "" {
 		parts = append(parts, fmt.Sprintf(`%s < "%s"`, field, to))
