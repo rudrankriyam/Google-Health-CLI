@@ -35,3 +35,15 @@ func TestFilterFromRange(t *testing.T) {
 		t.Fatalf("FilterFromRange() = %q, want %q", got, want)
 	}
 }
+
+func TestFilterFromRangeUsesSleepCivilEndTime(t *testing.T) {
+	dataType, ok := Lookup("sleep")
+	if !ok {
+		t.Fatal("sleep missing")
+	}
+	got := FilterFromRange(dataType, "2026-06-14", "2026-06-28")
+	want := `sleep.interval.civil_end_time >= "2026-06-14" AND sleep.interval.civil_end_time < "2026-06-28"`
+	if got != want {
+		t.Fatalf("FilterFromRange() = %q, want %q", got, want)
+	}
+}

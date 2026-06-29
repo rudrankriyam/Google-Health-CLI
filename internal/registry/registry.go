@@ -135,6 +135,10 @@ func dailyPath(filter string) string {
 	return filter + ".date"
 }
 
+func sleepPath() string {
+	return "sleep.interval.civil_end_time"
+}
+
 var dataTypes = []DataType{
 	{Name: "Active Minutes", EndpointName: "active-minutes", FilterName: "active_minutes", RecordType: "Interval", Operations: ops("reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: intervalPath("active_minutes"), Source: "Google Health data types docs"},
 	{Name: "Active Zone Minutes", EndpointName: "active-zone-minutes", FilterName: "active_zone_minutes", RecordType: "Interval", Operations: ops("list", "reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: intervalPath("active_zone_minutes"), Source: "Google Health data types docs"},
@@ -160,7 +164,7 @@ var dataTypes = []DataType{
 	{Name: "Respiratory Rate Sleep Summary", EndpointName: "respiratory-rate-sleep-summary", FilterName: "respiratory_rate_sleep_summary", RecordType: "Sample", Operations: ops("list", "reconcile"), Scope: "health_metrics_and_measurements", DefaultTimePath: samplePath("respiratory_rate_sleep_summary"), Source: "Google Health data types docs"},
 	{Name: "Run VO2 Max", EndpointName: "run-vo2-max", FilterName: "run_vo2_max", RecordType: "Sample", Operations: ops("list", "reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: samplePath("run_vo2_max"), Source: "Google Health data types docs"},
 	{Name: "Sedentary Period", EndpointName: "sedentary-period", FilterName: "sedentary_period", RecordType: "Interval", Operations: ops("list", "reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: intervalPath("sedentary_period"), Source: "Google Health data types docs"},
-	{Name: "Sleep", EndpointName: "sleep", FilterName: "sleep", RecordType: "Session", Operations: ops("list", "get", "reconcile", "create", "update", "batchDelete"), Scope: "sleep", DefaultTimePath: intervalPath("sleep"), Source: "Google Health data types docs"},
+	{Name: "Sleep", EndpointName: "sleep", FilterName: "sleep", RecordType: "Session", Operations: ops("list", "get", "reconcile", "create", "update", "batchDelete"), Scope: "sleep", DefaultTimePath: sleepPath(), Source: "Google Health data types docs"},
 	{Name: "Steps", EndpointName: "steps", FilterName: "steps", RecordType: "Interval", Operations: ops("list", "reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: intervalPath("steps"), Source: "Google Health data types docs"},
 	{Name: "Swim Lengths Data", EndpointName: "swim-lengths-data", FilterName: "swim_lengths_data", RecordType: "Interval", Operations: ops("list", "reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: intervalPath("swim_lengths_data"), Source: "Google Health data types docs"},
 	{Name: "Time in Heart Rate Zone", EndpointName: "time-in-heart-rate-zone", FilterName: "time_in_heart_rate_zone", RecordType: "Interval", Operations: ops("reconcile", "rollup", "dailyRollUp"), Scope: "activity_and_fitness", DefaultTimePath: intervalPath("time_in_heart_rate_zone"), Source: "Google Health data types docs"},
