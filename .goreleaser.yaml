@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: ghealth
-    main: .
+    main: ./cmd/ghealth
     binary: ghealth
     env:
       - CGO_ENABLED=0

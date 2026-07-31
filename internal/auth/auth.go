@@ -13,10 +13,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -150,12 +153,9 @@ func Login(ctx context.Context, cfg config.Config, opts LoginOptions) (*oauth2.T
 	if err != nil {
 		return nil, err
 	}
-	redirect, err := url.Parse(oauthCfg.RedirectURL)
+	redirect, err := validateLoopbackRedirect(oauthCfg.RedirectURL)
 	if err != nil {
 		return nil, err
-	}
-	if redirect.Scheme != "http" {
-		return nil, errors.New("login currently requires an http localhost redirect URI")
 	}
 
 	codeChal, verifier, err := pkce()
@@ -191,14 +191,20 @@ func Login(ctx context.Context, cfg config.Config, opts LoginOptions) (*oauth2.T
 		return nil, err
 	}
 	mux.HandleFunc(redirect.Path, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		if got := r.URL.Query().Get("state"); got != state {
 			http.Error(w, "state mismatch", http.StatusBadRequest)
-			sendErr(errors.New("OAuth state mismatch"))
+			// An unsolicited or stale callback must not be able to cancel the
+			// real browser flow. Keep waiting for the callback with our state.
 			return
 		}
 		if value := r.URL.Query().Get("error"); value != "" {
-			http.Error(w, value, http.StatusBadRequest)
-			sendErr(fmt.Errorf("OAuth error: %s", value))
+			message := oauthCallbackErrorMessage(value, r.URL.Query().Get("error_description"))
+			http.Error(w, message, http.StatusBadRequest)
+			sendErr(fmt.Errorf("OAuth error: %s", message))
 			return
 		}
 		code := r.URL.Query().Get("code")
@@ -246,8 +252,7 @@ func Login(ctx context.Context, cfg config.Config, opts LoginOptions) (*oauth2.T
 		if err := SaveToken(token); err != nil {
 			return nil, err
 		}
-		cfg.Scopes = oauthCfg.Scopes
-		if err := config.Save(cfg); err != nil {
+		if err := config.SaveScopes(oauthCfg.Scopes); err != nil {
 			return nil, fmt.Errorf("login succeeded but saving config failed: %w", err)
 		}
 		return token, nil
@@ -295,29 +300,124 @@ func SaveToken(token *oauth2.Token) error {
 	return store.Write(bytes)
 }
 
-func RevokeLocal() error {
+// RevokeLocal deletes the token from the active local store. The boolean is
+// true only when a token existed and was removed. It does not revoke the token
+// at Google's OAuth endpoint.
+func RevokeLocal() (bool, error) {
 	store, err := activeStore()
 	if err != nil {
-		return err
+		return false, err
 	}
 	return store.Delete()
 }
 
-func CurrentStatus() Status {
+// CurrentStatus returns a truthful local authentication receipt. A missing
+// token is a normal unauthenticated state; backend, token-decoding, and stored
+// configuration failures are returned instead of being collapsed into it.
+func CurrentStatus() (Status, error) {
 	var status Status
 	store, err := activeStore()
 	if err != nil {
-		return status
+		return status, err
 	}
 	status.TokenPath = store.Location()
-	token, err := LoadToken()
-	if err != nil {
-		return status
+
+	storedConfig, configErr := config.LoadStored()
+	tokenBytes, tokenErr := store.Read()
+	if tokenErr != nil {
+		if errors.Is(tokenErr, os.ErrNotExist) {
+			if configErr != nil {
+				return status, fmt.Errorf("load stored authentication config: %w", configErr)
+			}
+			return status, nil
+		}
+		if configErr != nil {
+			return status, errors.Join(
+				fmt.Errorf("read stored OAuth token: %w", tokenErr),
+				fmt.Errorf("load stored authentication config: %w", configErr),
+			)
+		}
+		return status, fmt.Errorf("read stored OAuth token: %w", tokenErr)
 	}
-	status.Authenticated = true
-	status.Expiry = token.Expiry
-	status.Valid = token.Valid() || token.RefreshToken != ""
-	return status
+
+	var token oauth2.Token
+	if err := json.Unmarshal(tokenBytes, &token); err != nil {
+		tokenErr = fmt.Errorf("decode stored OAuth token: %w", err)
+	}
+	if tokenErr == nil {
+		status.Authenticated = true
+		status.Expiry = token.Expiry
+		status.Valid = token.Valid() || token.RefreshToken != ""
+	}
+	if tokenErr != nil || configErr != nil {
+		if tokenErr != nil && configErr != nil {
+			return status, errors.Join(tokenErr, fmt.Errorf("load stored authentication config: %w", configErr))
+		}
+		if tokenErr != nil {
+			return status, tokenErr
+		}
+		return status, fmt.Errorf("load stored authentication config: %w", configErr)
+	}
+
+	status.Scopes = append([]string(nil), storedConfig.Scopes...)
+	return status, nil
+}
+
+func oauthCallbackErrorMessage(code, description string) string {
+	code = sanitizeOAuthText(code)
+	description = sanitizeOAuthText(description)
+	if code == "" {
+		code = "unknown_error"
+	}
+	if description == "" {
+		return code
+	}
+	return code + ": " + description
+}
+
+func sanitizeOAuthText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	const maximumRunes = 512
+	runes := []rune(value)
+	if len(runes) > maximumRunes {
+		value = string(runes[:maximumRunes]) + "..."
+	}
+	return value
+}
+
+func validateLoopbackRedirect(rawURL string) (*url.URL, error) {
+	redirect, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid OAuth redirect URI: %w", err)
+	}
+	if redirect.Scheme != "http" || redirect.Opaque != "" {
+		return nil, errors.New("OAuth redirect URI must use http on a literal loopback address")
+	}
+	if redirect.User != nil || redirect.RawQuery != "" || redirect.ForceQuery || redirect.Fragment != "" {
+		return nil, errors.New("OAuth redirect URI must not contain credentials, a query, or a fragment")
+	}
+	ip := net.ParseIP(redirect.Hostname())
+	if ip == nil || !ip.IsLoopback() {
+		return nil, errors.New("OAuth redirect URI host must be a literal loopback address")
+	}
+	portText := redirect.Port()
+	if portText == "" {
+		return nil, errors.New("OAuth redirect URI must include an explicit port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("OAuth redirect URI has an invalid port")
+	}
+	if redirect.RawPath != "" || redirect.Path == "" || redirect.Path == "/" || pathpkg.Clean(redirect.Path) != redirect.Path {
+		return nil, errors.New("OAuth redirect URI must include a clean, non-root callback path")
+	}
+	return redirect, nil
 }
 
 func pkce() (challenge, verifier string, err error) {

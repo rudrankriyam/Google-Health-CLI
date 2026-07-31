@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -88,5 +90,125 @@ func TestLoadCorruptFileReturnsError(t *testing.T) {
 	}
 	if _, err := Load(); err == nil {
 		t.Fatal("Load of corrupt config: expected error")
+	}
+}
+
+func TestLoadStoredExcludesEnvironmentOverrides(t *testing.T) {
+	setConfigDir(t)
+	if err := Save(Config{
+		BaseURL:      "https://stored.example",
+		ClientID:     "stored-client",
+		ClientSecret: "stored-secret",
+		Scopes:       []string{"stored-scope"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	t.Setenv("GHEALTH_BASE_URL", "https://effective.example")
+	t.Setenv("GHEALTH_CLIENT_ID", "effective-client")
+	t.Setenv("GHEALTH_CLIENT_SECRET", "effective-secret")
+	t.Setenv("GHEALTH_SCOPES", "effective-a,effective-b")
+
+	effective, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if effective.BaseURL != "https://effective.example" || effective.ClientID != "effective-client" || effective.ClientSecret != "effective-secret" {
+		t.Fatalf("effective config did not apply environment: %#v", effective)
+	}
+	if got := strings.Join(effective.Scopes, ","); got != "effective-a,effective-b" {
+		t.Fatalf("effective scopes = %q", got)
+	}
+
+	stored, err := LoadStored()
+	if err != nil {
+		t.Fatalf("LoadStored: %v", err)
+	}
+	if stored.BaseURL != "https://stored.example" || stored.ClientID != "stored-client" || stored.ClientSecret != "stored-secret" {
+		t.Fatalf("stored config contains environment overrides: %#v", stored)
+	}
+	if got := strings.Join(stored.Scopes, ","); got != "stored-scope" {
+		t.Fatalf("stored scopes = %q", got)
+	}
+}
+
+func TestRedactedConfigNeverSerializesClientSecret(t *testing.T) {
+	cfg := Config{
+		BaseURL:      "https://health.googleapis.com",
+		ClientID:     "client-id",
+		ClientSecret: "super-secret-value",
+		Scopes:       []string{"scope-a"},
+	}
+	public := cfg.Redacted()
+	encoded, err := json.Marshal(public)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), cfg.ClientSecret) {
+		t.Fatalf("redacted config exposed secret: %s", encoded)
+	}
+	if public.ClientSecret != RedactedSecret {
+		t.Fatalf("ClientSecret = %q, want %q", public.ClientSecret, RedactedSecret)
+	}
+
+	if got := (Config{}).Redacted().ClientSecret; got != "" {
+		t.Fatalf("empty secret redaction = %q, want empty", got)
+	}
+}
+
+func TestSaveScopesUpdatesOnlyStoredScopes(t *testing.T) {
+	setConfigDir(t)
+	if err := Save(Config{
+		BaseURL:      "https://stored.example",
+		ClientID:     "stored-client",
+		ClientSecret: "stored-secret",
+		Scopes:       []string{"old-scope"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	t.Setenv("GHEALTH_BASE_URL", "https://effective.example")
+	t.Setenv("GHEALTH_CLIENT_SECRET", "effective-secret")
+
+	if err := SaveScopes([]string{"new-a", "new-b"}); err != nil {
+		t.Fatalf("SaveScopes: %v", err)
+	}
+	stored, err := LoadStored()
+	if err != nil {
+		t.Fatalf("LoadStored: %v", err)
+	}
+	if stored.BaseURL != "https://stored.example" || stored.ClientID != "stored-client" || stored.ClientSecret != "stored-secret" {
+		t.Fatalf("SaveScopes changed stored config: %#v", stored)
+	}
+	if got := strings.Join(stored.Scopes, ","); got != "new-a,new-b" {
+		t.Fatalf("stored scopes = %q", got)
+	}
+}
+
+func TestSaveAtomicallyRepairsConfigPermissions(t *testing.T) {
+	dir := setConfigDir(t)
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Save(Config{ClientID: "client-id"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %v, want 0600", got)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, ".config.json.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("temporary files remain after Save: %v", files)
 	}
 }
