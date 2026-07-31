@@ -281,9 +281,11 @@ go build ./...
 go build -o ghealth ./cmd/ghealth
 ```
 
-Releases are tag-driven through GoReleaser. Tags do not use a `v` prefix:
+Releases are tag-driven through GoReleaser. GitHub release tags do not use a `v` prefix:
 
 ```sh
 git tag 1.1.0
 git push origin 1.1.0
 ```
+
+Before publishing the GitHub release, the workflow creates a matching `vX.Y.Z` tag at the same commit for Go module resolution. This keeps `go install ...@latest` versioned without creating a second GitHub release.
