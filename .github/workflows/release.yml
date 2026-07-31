@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
@@ -33,11 +37,35 @@ jobs:
           go build ./...
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
+      - name: Verify release provenance and publish Go module tag alias
+        run: |
+          release_sha="$(git ls-remote --tags origin "refs/tags/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          main_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [[ "${release_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::${GITHUB_REF_NAME} points to ${release_sha}, expected ${GITHUB_SHA}"
+            exit 1
+          fi
+          if [[ "${main_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::Release commit ${GITHUB_SHA} is not the current origin/main commit ${main_sha}"
+            exit 1
+          fi
+          module_tag="v${GITHUB_REF_NAME}"
+          existing_sha="$(git ls-remote --tags origin "refs/tags/${module_tag}" | awk '{print $1}')"
+          if [[ -n "${existing_sha}" ]]; then
+            if [[ "${existing_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "::error::${module_tag} already points to ${existing_sha}, expected ${GITHUB_SHA}"
+              exit 1
+            fi
+            exit 0
+          fi
+          git tag "${module_tag}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${module_tag}"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: v2.17.1
           args: release --clean
         env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

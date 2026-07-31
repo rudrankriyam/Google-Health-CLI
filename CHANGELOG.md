@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+- Fixed binaries installed with `go install` reporting the stale hard-coded `1.0.0-dev` version instead of their embedded Go module version.
+- Added an automated `vX.Y.Z` Go module tag alias for each digit-prefixed GitHub release tag so `go install ...@latest` resolves a real semantic version.
+
 ## 1.1.0
 
 - Updated the registry to all 39 publicly documented Google Health data types and corrected the operation metadata for existing types.
