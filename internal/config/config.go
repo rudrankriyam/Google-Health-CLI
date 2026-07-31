@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,34 @@ type Config struct {
 	Scopes       []string `json:"scopes,omitempty"`
 }
 
+// PublicConfig is the safe-to-display representation of Config. It preserves
+// whether a client secret is configured without exposing the secret itself.
+type PublicConfig struct {
+	BaseURL      string   `json:"baseURL,omitempty"`
+	User         string   `json:"user,omitempty"`
+	Project      string   `json:"project,omitempty"`
+	ClientID     string   `json:"clientID,omitempty"`
+	ClientSecret string   `json:"clientSecret,omitempty"`
+	RedirectURL  string   `json:"redirectURL,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+}
+
+const RedactedSecret = "[REDACTED]"
+
 func Load() (Config, error) {
+	cfg, err := LoadStored()
+	if err != nil {
+		return cfg, err
+	}
+	applyEnv(&cfg)
+	cfg.normalize()
+	return cfg, nil
+}
+
+// LoadStored returns only values read from disk plus defaults. Environment
+// overrides are deliberately excluded so callers can update durable state
+// without accidentally persisting process-local credentials or settings.
+func LoadStored() (Config, error) {
 	cfg := Config{
 		BaseURL:     DefaultBaseURL,
 		User:        DefaultUser,
@@ -46,7 +74,6 @@ func Load() (Config, error) {
 		}
 	}
 
-	applyEnv(&cfg)
 	cfg.normalize()
 	return cfg, nil
 }
@@ -65,7 +92,72 @@ func Save(cfg Config) error {
 		return err
 	}
 	bytes = append(bytes, '\n')
-	return os.WriteFile(path, bytes, 0o600)
+	return WritePrivateFile(path, bytes)
+}
+
+// SaveScopes updates the durable scope receipt without persisting any
+// environment or command-line overrides present in an effective Config.
+func SaveScopes(scopes []string) error {
+	cfg, err := LoadStored()
+	if err != nil {
+		return err
+	}
+	cfg.Scopes = append([]string(nil), scopes...)
+	return Save(cfg)
+}
+
+// Redacted returns a representation suitable for CLI and diagnostic output.
+func (cfg Config) Redacted() PublicConfig {
+	secret := ""
+	if strings.TrimSpace(cfg.ClientSecret) != "" {
+		secret = RedactedSecret
+	}
+	return PublicConfig{
+		BaseURL:      cfg.BaseURL,
+		User:         cfg.User,
+		Project:      cfg.Project,
+		ClientID:     cfg.ClientID,
+		ClientSecret: secret,
+		RedirectURL:  cfg.RedirectURL,
+		Scopes:       append([]string(nil), cfg.Scopes...),
+	}
+}
+
+// WritePrivateFile atomically replaces path with a mode-0600 file. Writing a
+// new inode before rename also repairs permissions when an older destination
+// was too permissive and avoids exposing partially written credentials.
+func WritePrivateFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+
+	temporary, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace private file: %w", err)
+	}
+	return nil
 }
 
 func ConfigDir() (string, error) {

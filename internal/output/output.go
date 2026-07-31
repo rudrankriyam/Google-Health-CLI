@@ -105,11 +105,13 @@ func PrintError(w io.Writer, err error, opts Options, hint string) {
 		_ = Print(w, ErrorPayload{Status: "error", Message: err.Error(), Hint: hint}, Options{Format: FormatJSON, Pretty: true})
 		return
 	}
+	message := sanitize(err.Error())
+	hint = sanitize(hint)
 	if hint == "" {
-		fmt.Fprintf(w, "Error: %s\n", err)
+		fmt.Fprintf(w, "Error: %s\n", message)
 		return
 	}
-	fmt.Fprintf(w, "Error: %s\nHint: %s\n", err, hint)
+	fmt.Fprintf(w, "Error: %s\nHint: %s\n", message, hint)
 }
 
 func PrintTable(w io.Writer, value any) error {
@@ -120,7 +122,7 @@ func PrintTable(w io.Writer, value any) error {
 	}
 	headers := sortedKeys(rows[0])
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	fmt.Fprintln(tw, strings.Join(displayHeaders(headers, false), "\t"))
 	for _, row := range rows {
 		fields := make([]string, 0, len(headers))
 		for _, header := range headers {
@@ -138,7 +140,7 @@ func PrintMarkdown(w io.Writer, value any) error {
 		return err
 	}
 	headers := sortedKeys(rows[0])
-	fmt.Fprintf(w, "| %s |\n", strings.Join(headers, " | "))
+	fmt.Fprintf(w, "| %s |\n", strings.Join(displayHeaders(headers, true), " | "))
 	separators := make([]string, len(headers))
 	for i := range separators {
 		separators[i] = "---"
@@ -241,6 +243,17 @@ func sortedKeys(row map[string]any) []string {
 	return keys
 }
 
+func displayHeaders(headers []string, markdown bool) []string {
+	display := make([]string, len(headers))
+	for index, header := range headers {
+		display[index] = sanitize(header)
+		if markdown {
+			display[index] = strings.ReplaceAll(display[index], "|", "\\|")
+		}
+	}
+	return display
+}
+
 func stringify(value any) string {
 	switch v := value.(type) {
 	case nil:
@@ -261,7 +274,7 @@ func stringify(value any) string {
 func sanitize(value string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
-			return -1
+			return ' '
 		}
 		return r
 	}, value)

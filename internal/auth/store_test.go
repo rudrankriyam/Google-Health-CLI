@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -11,12 +12,14 @@ import (
 
 // fakeSecurity emulates /usr/bin/security generic-password subcommands.
 type fakeSecurity struct {
-	items map[string]string
-	calls [][]string
+	items  map[string]string
+	calls  [][]string
+	inputs [][]byte
 }
 
-func (f *fakeSecurity) run(args ...string) ([]byte, error) {
+func (f *fakeSecurity) run(input []byte, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, args)
+	f.inputs = append(f.inputs, append([]byte(nil), input...))
 	flags := map[string]string{}
 	for i := 1; i < len(args)-1; i++ {
 		if args[i] == "-s" || args[i] == "-a" || args[i] == "-w" {
@@ -26,7 +29,7 @@ func (f *fakeSecurity) run(args ...string) ([]byte, error) {
 	key := flags["-s"] + "/" + flags["-a"]
 	switch args[0] {
 	case "add-generic-password":
-		f.items[key] = flags["-w"]
+		f.items[key] = string(input)
 		return nil, nil
 	case "find-generic-password":
 		value, ok := f.items[key]
@@ -57,6 +60,14 @@ func TestKeychainStoreRoundTrip(t *testing.T) {
 	if err := store.Write(payload); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	for _, call := range fake.calls {
+		for _, argument := range call {
+			if argument == encoded {
+				t.Fatal("keychain password was exposed in process arguments")
+			}
+		}
+	}
 	got, err := store.Read()
 	if err != nil {
 		t.Fatalf("Read: %v", err)
@@ -65,15 +76,23 @@ func TestKeychainStoreRoundTrip(t *testing.T) {
 		t.Fatalf("Read = %q, want %q", got, payload)
 	}
 
-	if err := store.Delete(); err != nil {
+	deleted, err := store.Delete()
+	if err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("Delete reported no deletion")
 	}
 	if _, err := store.Read(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Read after Delete: err = %v, want os.ErrNotExist", err)
 	}
 	// Deleting an absent item is not an error.
-	if err := store.Delete(); err != nil {
+	deleted, err = store.Delete()
+	if err != nil {
 		t.Fatalf("Delete of absent item: %v", err)
+	}
+	if deleted {
+		t.Fatal("Delete of absent item reported deletion")
 	}
 }
 
@@ -94,11 +113,60 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if string(got) != "{}" {
 		t.Fatalf("Read = %q, want {}", got)
 	}
-	if err := store.Delete(); err != nil {
+	deleted, err := store.Delete()
+	if err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("Delete reported no deletion")
 	}
 	if _, err := store.Read(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Read after Delete: err = %v, want os.ErrNotExist", err)
+	}
+	deleted, err = store.Delete()
+	if err != nil {
+		t.Fatalf("Delete of absent item: %v", err)
+	}
+	if deleted {
+		t.Fatal("Delete of absent item reported deletion")
+	}
+}
+
+func TestFileStoreAtomicallyRepairsPermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token.json")
+	t.Setenv("GHEALTH_TOKEN_FILE", path)
+	if err := os.WriteFile(path, []byte("old-token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := fileStore{}
+	if err := store.Write([]byte("new-token")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-token" {
+		t.Fatalf("token contents = %q", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("token mode = %v, want 0600", got)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, ".token.json.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("temporary files remain after Write: %v", files)
 	}
 }
 

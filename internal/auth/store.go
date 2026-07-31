@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -22,7 +21,8 @@ type TokenStore interface {
 	// os.ErrNotExist when no token is stored.
 	Read() ([]byte, error)
 	Write(data []byte) error
-	Delete() error
+	// Delete returns true only when a stored token existed and was removed.
+	Delete() (bool, error)
 	// Location is a human-readable description of where the token lives.
 	Location() string
 }
@@ -57,21 +57,21 @@ func (fileStore) Write(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
+	return config.WritePrivateFile(path, data)
 }
 
-func (fileStore) Delete() error {
+func (fileStore) Delete() (bool, error) {
 	path, err := config.TokenPath()
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 func (fileStore) Location() string {
@@ -87,11 +87,11 @@ const (
 // keychainStore stores the token as a base64-encoded generic password in the
 // macOS Keychain via /usr/bin/security. run is swappable for tests.
 type keychainStore struct {
-	run func(args ...string) ([]byte, error)
+	run func(input []byte, args ...string) ([]byte, error)
 }
 
 func (s keychainStore) Read() ([]byte, error) {
-	out, err := s.run("find-generic-password", "-s", keychainService, "-a", keychainAccount, "-w")
+	out, err := s.run(nil, "find-generic-password", "-s", keychainService, "-a", keychainAccount, "-w")
 	if err != nil {
 		return nil, err
 	}
@@ -104,16 +104,21 @@ func (s keychainStore) Read() ([]byte, error) {
 
 func (s keychainStore) Write(data []byte) error {
 	encoded := base64.StdEncoding.EncodeToString(data)
-	_, err := s.run("add-generic-password", "-U", "-s", keychainService, "-a", keychainAccount, "-w", encoded)
+	// Passing the password after -w exposes it through the process argument
+	// list. A trailing -w makes security prompt on stdin instead.
+	_, err := s.run([]byte(encoded+"\n"), "add-generic-password", "-U", "-s", keychainService, "-a", keychainAccount, "-w")
 	return err
 }
 
-func (s keychainStore) Delete() error {
-	_, err := s.run("delete-generic-password", "-s", keychainService, "-a", keychainAccount)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+func (s keychainStore) Delete() (bool, error) {
+	_, err := s.run(nil, "delete-generic-password", "-s", keychainService, "-a", keychainAccount)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 func (keychainStore) Location() string {
@@ -122,9 +127,12 @@ func (keychainStore) Location() string {
 
 // securityRun executes /usr/bin/security, mapping its "item not found" exit
 // code (44) to os.ErrNotExist.
-func securityRun(args ...string) ([]byte, error) {
+func securityRun(input []byte, args ...string) ([]byte, error) {
 	cmd := exec.Command("/usr/bin/security", args...)
 	var stdout, stderr bytes.Buffer
+	if len(input) > 0 {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
